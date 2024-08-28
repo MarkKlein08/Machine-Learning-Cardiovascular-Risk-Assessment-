@@ -1,0 +1,546 @@
+---
+title: "Cardiovascular Risk Assessment RMD"
+author: "Mark Klein"
+date: "11/10/2023"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# DATA CLEANING
+## Read in packages
+```{r}
+library(ggplot2)
+library(ROCR)
+library(boot)
+library(MASS)
+library(ipred)
+library(klaR)
+library(ICS)
+library(glmnet)
+library(tree)
+```
+
+## Load and subset the data
+```{r}
+Data<-read.csv("health_failure_clinical_records_dataset.csv")
+Data<-Data[,c(1,2,3,4,5,6,7,8,9,10,11,13)]
+```
+
+## Convert variables to factors and label
+```{r}
+Data$anaemia<-factor(Data$anaemia)
+levels(Data$anaemia)<-c("Non-Anemic","Anemic")
+Data$diabetes<-factor(Data$diabetes)
+levels(Data$diabetes)<-c("Non-Diabetic", "Diabetic")
+Data$high_blood_pressure<-factor(Data$high_blood_pressure)
+levels(Data$high_blood_pressure)<-c("Non-Hypertensive", "Hypertensive")
+Data$sex<-factor(Data$sex)
+levels(Data$sex)<-c("Female", "Male")
+Data$smoking<-factor(Data$smoking)
+levels(Data$smoking)<-c("Non-Smoker", "Smoker")
+Data$DEATH_EVENT<-factor(Data$DEATH_EVENT)
+levels(Data$DEATH_EVENT)<-c(" No Death", "Death")
+```
+
+
+## Distribution of Response Variable
+```{r}
+ggplot(Data, aes(x=creatinine_phosphokinase)) + 
+geom_histogram(aes(y=..density..), bins=10)+
+labs(y="Frequency", x="Creatinine Phosphokinase (mcg/L)",
+title="Distribution of Creatinine Phosphokinase")
+```
+
+## Change Response Variable in Data
+```{r}
+Data$creatinine_phosphokinase<-log(Data$creatinine_phosphokinase)
+```
+
+## Transformed Response Variable using Log Transformation
+```{r}
+ggplot(Data, aes(x=creatinine_phosphokinase)) + 
+geom_histogram(aes(y=..density..), bins=10)+
+labs(y="Frequency", x="Creatinine Phosphokinase (mcg/L)",
+title="Distribution of Log(Creatinine Phosphokinase)")
+```
+
+
+## Split data training and test sets
+```{r}
+set.seed(0925)
+sample.data<-sample.int(nrow(Data), floor(.50*nrow(Data)), replace = F)
+train<-Data[sample.data, ]
+test<-Data[-sample.data, ]
+```
+
+
+# EXPLORATORY DATA ANALYSIS
+
+## Correlation Matrix of Selected Variables
+```{r}
+cor(train[,c(1,3,5,7,8,9)])
+```
+
+## Scatterplot Matrix of Selected Variables
+```{r}
+pairs(train[,c(1,3,5,7,8,9)], lower.panel=NULL)
+```
+
+## Scatterplot: Creatinine Phosphokinase vs. Age
+```{r}
+ggplot2::ggplot(train, aes(y=creatinine_phosphokinase, x=age))+
+geom_point()+
+  stat_smooth(method = "lm", 
+              formula = y ~ x, 
+              geom = "smooth")+
+labs(y="Creatine Phosphokinase (mcg/L)", x="Age (years)",
+title="Scatterplot: Creatinine Phosphokinase vs. Age")
+```
+
+## Scatterplot: Creatinine Phosphokinase vs. Ejection Fraction
+```{r}
+ggplot2::ggplot(train, aes(y=creatinine_phosphokinase, x=ejection_fraction))+
+geom_point()+
+  stat_smooth(method = "lm", 
+              formula = y ~ x, 
+              geom = "smooth")+
+labs(y="Creatinine Phosphokinase (mcg/L)", x="Ejection Fraction (Percentage)",
+title="Scatterplot: Creatinine Phosphokinase vs. Ejection Fraction")
+```
+
+
+## Scatterplot: Creatinine Phosphokinase vs. Platelets
+```{r}
+ggplot2::ggplot(train, aes(y=creatinine_phosphokinase, x=platelets))+
+geom_point()+
+  stat_smooth(method = "lm", 
+              formula = y ~ x, 
+              geom = "smooth")+
+labs(y="Creatinine Phosphokinase (mcg/L)", x="Platelets (kiloplatelets/mL)",
+title="Creatinine Phosphokinase vs. Platelets")
+```
+
+
+## Scatterplot: Creatinine Phosphokinase vs. Serum Creatinine
+```{r}
+ggplot2::ggplot(train, aes(y=creatinine_phosphokinase, x=serum_creatinine))+
+geom_point()+
+  stat_smooth(method = "lm", 
+              formula = y ~ x, 
+              geom = "smooth")+
+labs(y="Creatinine Phosphokinase (mcg/L)", x="Serum Creatinine (mg/dL)",
+title="Scatterplot: Creatinine Phosphokinase vs. Serum Creatinine")
+```
+
+
+## Scatterplot: Creatinine Phosphokinase vs. Serum Sodium
+```{r}
+ggplot2::ggplot(train, aes(y=creatinine_phosphokinase, x=serum_sodium))+
+geom_point()+
+  stat_smooth(method = "lm", 
+              formula = y ~ x, 
+              geom = "smooth")+
+labs(y="Creatinine Phosphokinase (mcg/L)", x="Serum Sodium (mEq/L)",
+title="Scatterplot: Creatinine Phosphokinase vs. Serum Sodium")
+```
+
+
+## Boxplot: Creatinine Phosphokinase vs. High Blood Pressure
+```{r}
+ggplot2::ggplot(train, aes(x=high_blood_pressure, y=creatinine_phosphokinase))+
+geom_boxplot()+
+labs(x="High Blood Pressure", y="Creatinine Phosphokinase (mcg/L)",
+title="Boxplot of Creatinine Phosphokinase by High Blood Pressure")
+```
+
+
+## Boxplot: Creatinine Phosphokinase vs. Diabetes
+```{r}
+ggplot2::ggplot(train, aes(x=diabetes, y=creatinine_phosphokinase))+
+geom_boxplot()+
+labs(x="Diabetes", y="Creatinine Phosphokinase (mcg/L)",
+title="Boxplot of Creatinine Phosphokinase by Diabetes")
+```
+
+
+## Scatterplot: Creatinine Phosphokinase vs. Anemia
+```{r}
+ggplot2::ggplot(train, aes(x=anaemia, y=creatinine_phosphokinase))+
+geom_boxplot()+
+labs(x="Anemia", y="Creatinine Phosphokinase (mcg/L)",
+title="Boxplot of Creatinine Phosphokinase by Anemia")
+```
+
+
+## Scatterplot: Creatinine Phosphokinase vs. Sex
+```{r}
+ggplot2::ggplot(train, aes(x=sex, y=creatinine_phosphokinase))+
+geom_boxplot()+
+labs(x="Sex", y="Creatinine Phosphokinase (mcg/L)",
+title="Boxplot of Creatinine Phosphokinase by Sex")
+```
+
+## Scatterplot: Creatinine Phosphokinase vs. Death Event
+```{r}
+ggplot2::ggplot(train, aes(x=DEATH_EVENT, y=creatinine_phosphokinase))+
+geom_boxplot()+
+labs(x="Death Event", y="Creatinine Phosphokinase (mcg/L)",
+title="Boxplot of Creatinine Phosphokinase by Death Event")
+```
+
+# SHRINKAGE METHODS
+
+## Prep Data for Shrinkage
+```{r}
+x<-model.matrix(creatinine_phosphokinase~.,data=Data)[,-c(1,12)]
+head(x)
+y<-Data$creatinine_phosphokinase
+```
+
+# RIDGE REGRESSION
+
+## Setting the Threshhold
+```{r}
+ridge.r<-glmnet::glmnet(x,y,alpha=0, lambda=0)
+
+## compare with OLS
+result<-lm(creatinine_phosphokinase~age+anaemia+diabetes+ejection_fraction+high_blood_pressure+platelets+serum_creatinine+serum_sodium+sex+smoking,data=Data)
+cbind(coefficients(result), coefficients(ridge.r))
+```
+
+```{r}
+ridge.r<-glmnet::glmnet(x,y,alpha=0, lambda=0, thresh = 1e-23)
+cbind(coefficients(result), coefficients(ridge.r))
+```
+
+## Split training and test
+```{r}
+set.seed(0925)
+sample.data<-sample.int(nrow(Data), floor(.50*nrow(Data)), replace = F)
+x.train<-x[sample.data,]
+x.test<-x[-sample.data,]
+y.train<-y[sample.data]
+y.test<-y[-sample.data]
+```
+
+## Tuning Parameter
+```{r}
+set.seed(0925)
+cv.out<-glmnet::cv.glmnet(x.train,y.train,alpha=0, thresh = 1e-23)
+bestlam<-cv.out$lambda.min
+bestlam
+```
+
+## Test MSE
+```{r}
+##fit ridge regression using training data and bestlam
+ridge.mod<-glmnet::glmnet(x.train,y.train,alpha=0,lambda=bestlam,
+thresh = 1e-23)
+
+##Test MSE with best lambda
+ridge.pred<-predict(ridge.mod,newx=x.test)
+mean((ridge.pred-y.test)^2)
+```
+
+## Test MSE vs. Log(lambda)
+```{r}
+plot(cv.out)
+```
+
+# LASSO REGRESSION
+
+```{r}
+lasso.r<-glmnet::glmnet(x,y,alpha=1, lambda=0, thresh = 1e-23)
+cbind(coefficients(result), coefficients(lasso.r))
+```
+## Tuning Parameter
+```{r}
+set.seed(0925)
+cv.out.lasso<-glmnet::cv.glmnet(x.train,y.train,alpha=1, thresh = 1e-23)
+bestlam.lasso<-cv.out.lasso$lambda.min
+bestlam.lasso
+```
+
+## Test MSE
+```{r}
+lasso.mod<-glmnet::glmnet(x.train,y.train,alpha=1,lambda=bestlam.lasso, thresh = 1e-23)
+lasso.pred<-predict(lasso.mod,newx=x.test)
+mean((lasso.pred-y.test)^2)
+```
+
+## Test MSE vs. Log(lambda)
+```{r}
+plot(cv.out.lasso)
+```
+
+# ORDINARY LEAST SQUARES
+```{r}
+##fit OLS by setting lambda=0
+ridge.mod.0<-glmnet::glmnet(x.train,y.train,alpha=0,lambda=0, thresh = 1e-23)
+
+##test MSE with lambda=0
+ridge.pred.0<-predict(ridge.mod.0,newx=x.test)
+mean((ridge.pred.0-y.test)^2)
+```
+
+
+## REGRESSION TREE ##
+
+# RECURSIVE BINARY SPLITTING
+
+```{r}
+tree.reg.train<-tree::tree(creatinine_phosphokinase~age+anaemia+diabetes+
+                             ejection_fraction+high_blood_pressure+platelets
+                           +serum_creatinine+serum_sodium+sex+smoking, data=train)
+summary(tree.reg.train)
+``` 
+
+## Plot the tree
+```{r}
+plot(tree.reg.train)
+text(tree.reg.train, cex=0.6, pretty=0)
+```
+
+## Test MSE
+```{r}
+pred.probs<-predict(tree.reg.train, newdata=test)
+mean((pred.probs-y.test)^2)
+```
+
+# PRUNED TREE
+```{r}
+## use k=10 CV to prune
+set.seed(2)
+cv.class<-tree::cv.tree(tree.reg.train, K=10) 
+## find size of tree that has the smallest deviance
+trees.num.reg<-cv.class$size[which.min(cv.class$dev)]
+trees.num.reg
+```
+
+## Plot pruned tree
+```{r}
+prune.reg<-tree::prune.tree(tree.reg.train, best=trees.num.reg)
+plot(prune.reg)
+text(prune.reg, cex=0.75, pretty=0)
+```
+
+## Summary of pruned tree
+```{r}
+summary(prune.reg)
+``` 
+
+## Test MSE 
+```{r}
+##prediction based on pruned tree for test data
+tree.pred.reg<-predict(prune.reg, newdata=test)
+# test MSE
+mean((tree.pred.reg-y.test)^2)
+```
+
+# RANDOM FORESTS
+
+## Fit regression tree with random forests
+```{r}
+set.seed(2)
+rf.class<-randomForest::randomForest(creatinine_phosphokinase~age+anaemia+diabetes+ejection_fraction+high_blood_pressure+platelets+serum_creatinine+serum_sodium+sex+smoking, data=train, mtry=3,importance=TRUE)
+summary(rf.class)
+```
+
+
+## Find test MSE
+```{r}
+# prediction based on random forest tree for test data
+pred.rf<-predict(rf.class, newdata=test)
+mean((pred.rf-y.test)^2)
+```
+
+## Find important predictors
+```{r}
+randomForest::varImpPlot(rf.class)
+``` 
+
+# RECURSIVE BINARY SPLITTING
+
+## Data Cleaning
+```{r}
+Data$DEATH_EVENT <- as.factor(Data$DEATH_EVENT)
+Data$creatinine_phosphokinase<-exp(Data$creatinine_phosphokinase)
+
+```
+
+## Split training and test
+```{r}
+
+set.seed(0925)
+sample.data<-sample.int(nrow(Data), floor(.50*nrow(Data)), replace = F)
+train<-Data[sample.data,]
+test<-Data[-sample.data,]
+y.test<-test[,"DEATH_EVENT"]
+```
+
+## Create tree
+```{r}
+tree.class.train<-tree::tree(DEATH_EVENT~., data=train)
+summary(tree.class.train)
+```
+## Plot of tree
+```{r}
+plot(tree.class.train)
+text(tree.class.train, cex=0.6, pretty=0)
+
+```
+## Confusion Matrix
+```{r}
+tree.pred.test<-predict(tree.class.train, newdata=test, type="class")
+table(y.test, tree.pred.test)
+```
+
+## Overall test error rate
+```{r}
+accuracy <- mean(tree.pred.test==y.test)
+test_error_rate <- 1 - accuracy
+test_error_rate
+```
+
+## False Positive Rate
+```{r}
+FPR = 36 / (36+70)
+FPR
+```
+
+## False Negative Rate
+```{r}
+FNR = 16 / (16+28)
+FNR
+```
+
+## Changing threshold to 0.2 for confusion matrix
+```{r}
+#confusion matrix
+tree.class.train<-tree::tree(DEATH_EVENT~., data=train)
+pred.probs<-predict(tree.class.train, newdata=test)
+
+table(y.test, pred.probs[,2]>0.2)
+
+#accuracy
+accuracy <- mean(tree.pred.test==y.test)
+test_error_rate <- 1 - accuracy
+test_error_rate
+```
+
+# PRUNED TREE
+
+## Find optimal size of tree
+```{r}
+set.seed(0925)
+cv.class<-tree::cv.tree(tree.class.train, K=10, FUN=prune.misclass)
+trees.num.class<-cv.class$size[which.min(cv.class$dev)]
+trees.num.class
+```
+
+## Create tree
+```{r}
+library(tree)
+prune.class<-tree::prune.misclass(tree.class.train, best=trees.num.class)
+prune.class
+summary(prune.class)
+```
+
+## Plot of tree
+```{r}
+plot(prune.class)
+text(prune.class, cex=0.75, pretty=0)
+
+```
+
+## Confusion Matrix
+```{r}
+tree.pred.test<-predict(prune.class, newdata=test, type="class")
+table(y.test, tree.pred.test)
+```
+
+## Overall test error rate
+```{r}
+accuracy <- mean(tree.pred.test==y.test)
+test_error_rate <- 1 - accuracy
+test_error_rate
+```
+
+## False Positive Rate
+```{r}
+FPR = 28 / (28+78)
+FPR
+
+```
+
+## False Negative Rate
+```{r}
+FNR = 11 / (11+33)
+FNR
+
+```
+
+## Changing threshold to 0.1 for confusion matrix
+```{r}
+#confusion matrix
+pred.probs<-predict(prune.class, newdata=test)
+table(y.test, pred.probs[,2]>0.10)
+
+#accuracy
+accuracy <- mean(tree.pred.test==y.test)
+test_error_rate <- 1 - accuracy
+test_error_rate
+```
+
+
+# RANDOM FORESTS IMPROVEMENTS
+
+## Create RF
+```{r}
+set.seed(2)
+rf.class<-randomForest::randomForest(DEATH_EVENT~., data=train, mtry=3,importance=TRUE)
+```
+## Variable Importance
+```{r}
+randomForest::varImpPlot(rf.class)
+```
+
+## Predictions and confusion matrix for RF
+```{r}
+##prediction on test data
+pred.rf<-predict(rf.class, newdata=test)
+##confusion matrix for test data
+table(y.test, pred.rf)
+```
+
+## Overall test error rate
+```{r}
+accuracy <- mean(pred.rf==y.test)
+test_error_rate <- 1 - accuracy
+test_error_rate
+```
+
+## False Positive Rate
+```{r}
+FPR = 20 / (20+86)
+FPR
+```
+
+## False Negative Rate
+```{r}
+FNR = 14 / (14+30)
+FNR
+```
+
+## Changing threshold to 0.3 for confusion matrix
+```{r}
+#confusion matrix
+pred.probs<-predict(rf.class, newdata=test, type="prob")
+
+table(y.test, pred.probs[,2]>0.3)
+```
